@@ -17,14 +17,16 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
 include_directories(
+  include
   SYSTEM ${PCL_INCLUDE_DIRS}
 )
 
 ## Targets
 ament_auto_add_library(rosbag2_to_pcd_node_component SHARED
-  src/include/rosbag2_to_pcd.hpp
   src/rosbag2_to_pcd.cpp
 )
+
+target_include_directories(rosbag2_to_pcd_node_component PRIVATE include)
 
 rclcpp_components_register_node(rosbag2_to_pcd_node_component
   PLUGIN "rosbag2_to_pcd::Rosbag2ToPcdNode"
