@@ -23,9 +23,6 @@ int main(int argc, char **argv)
             executor.spin_some(); // Spin while the flag is true
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-
-        // RCLCPP_INFO(rclcpp::get_logger("rosbag2_to_pcd"), "Node execution
-        // completed.");
     }
     catch (const std::exception &e)
     {
