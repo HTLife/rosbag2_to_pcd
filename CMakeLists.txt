@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
-project(rosbag2_to_pcd)
+cmake_policy(SET CMP0074 NEW)
+project(bag2pcd)
 
 ## Compile options
 if(NOT CMAKE_CXX_STANDARD)
@@ -13,37 +14,49 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 ## Dependencies
-find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(PCL REQUIRED)
 
+## Include directories
 include_directories(
   include
   SYSTEM ${PCL_INCLUDE_DIRS}
 )
 
-## Targets
-ament_auto_add_library(rosbag2_to_pcd_node_component SHARED
+## Add library for Rosbag2ToPcdNode
+add_library(rosbag2_to_pcd_node
   src/rosbag2_to_pcd.cpp
 )
 
-target_include_directories(rosbag2_to_pcd_node_component PRIVATE include)
-
-rclcpp_components_register_node(rosbag2_to_pcd_node_component
-  PLUGIN "rosbag2_to_pcd::Rosbag2ToPcdNode"
-  EXECUTABLE rosbag2_to_pcd_node
+ament_target_dependencies(rosbag2_to_pcd_node
+  rclcpp
+  sensor_msgs
+  rosbag2_cpp
+  pcl_conversions
+  PCL
 )
 
-## Tests
-if(BUILD_TESTING)
-  list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_uncrustify)
+target_include_directories(rosbag2_to_pcd_node PRIVATE include)
 
+## Add executable
+add_executable(bag2pcd src/main.cpp)
+target_link_libraries(bag2pcd rosbag2_to_pcd_node)
+
+## Install targets
+install(
+  TARGETS bag2pcd rosbag2_to_pcd_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+## Testing
+if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()
 
 ## Package
-ament_auto_package(
-  INSTALL_TO_SHARE
-  config
-  launch
-)
+ament_package()

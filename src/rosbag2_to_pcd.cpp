@@ -36,8 +36,8 @@
 namespace rosbag2_to_pcd
 {
 
-Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
-: Node("rosbag2_to_pcd")
+Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv, std::atomic<bool> &spin_flag)
+: Node("rosbag2_to_pcd"), spin_flag_(spin_flag)
 {
   RCLCPP_INFO(get_logger(), "Starting rosbag2_to_pcd node...");
 
@@ -45,8 +45,8 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
   if (argc != 4) {
     RCLCPP_ERROR(
       get_logger(),
-      "Usage: ros2 run pcl_ros bag_to_pcd <input_file.bag> <topic> <output_directory>");
-    rclcpp::shutdown();
+      "Usage: ros2 run bag2pcd bag2pcd <rosbag_folder> <topic> <output_directory>");
+    spin_flag_ = false; // Signal spinning to stop
     return;
   }
 
@@ -62,7 +62,7 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
     reader.open(path_bag);
   } catch (const std::exception &e) {
     RCLCPP_ERROR_STREAM(get_logger(), "Error opening bag file: " << e.what());
-    rclcpp::shutdown();
+    spin_flag_ = false; // Signal spinning to stop
     return;
   }
 
@@ -74,7 +74,7 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
 
   if (iter_topic == topics.end()) {
     RCLCPP_ERROR(get_logger(), "Topic not found in the bag file.");
-    rclcpp::shutdown();
+    spin_flag_ = false; // Signal spinning to stop
     return;
   }
 
@@ -85,11 +85,6 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
   bool format_detected = false;
 
   while (reader.has_next()) {
-    if (!rclcpp::ok()) {
-      RCLCPP_INFO(get_logger(), "Interrupted by user, shutting down...");
-      rclcpp::shutdown();
-      break;
-    }
 
     auto bag_message = reader.read_next();
 
@@ -120,7 +115,7 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv)
   }
 
   RCLCPP_INFO(get_logger(), "Finished converting bag file to pcd files.");
-  rclcpp::shutdown();
+  spin_flag_ = false; // Signal spinning to stop // rclcpp::shutdown();
 }
 
 std::string Rosbag2ToPcdNode::detect_point_cloud_format(const sensor_msgs::msg::PointCloud2 &msg_cloud)

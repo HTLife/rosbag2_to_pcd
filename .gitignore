@@ -9,3 +9,5 @@ log/
 
 # Jetbrains project files
 .idea/
+
+CMakeFiles/

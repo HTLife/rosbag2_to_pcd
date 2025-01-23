@@ -31,9 +31,10 @@ public:
    * @param argc Argument count from the command-line.
    * @param argv Argument vector from the command-line.
    */
-  Rosbag2ToPcdNode(int argc, char **argv);
+  Rosbag2ToPcdNode(int argc, char **argv, std::atomic<bool> &spin_flag);
 
 private:
+  std::atomic<bool> &spin_flag_;
   /**
    * @brief Detects the format of the PointCloud2 message based on its fields.
    * 

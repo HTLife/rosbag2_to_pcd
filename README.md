@@ -64,3 +64,11 @@ To visually check which point cloud corresponds to which timestamp:
 - Play your bag file.
 - Pause the bag file playing by pressing `space` key when needed.
 - Match the point cloud message's timestamp with the corresponding PCD file name.
+
+
+
+### deb
+```
+bloom-generate rosdebian --os-name ubuntu --os-version jammy --ros-distro humble
+
+```
