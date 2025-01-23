@@ -1,3 +1,5 @@
+// rosbag2_to_pcd.cpp
+
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2023 M. Fatih Cırıt
 //
@@ -22,9 +24,9 @@
 
 #include <exception>
 #include <filesystem>
+#include <iostream>
 #include <string>
 #include <unordered_set>
-#include <iostream>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
@@ -36,125 +38,172 @@
 namespace rosbag2_to_pcd
 {
 
-Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv, std::atomic<bool> &spin_flag)
-: Node("rosbag2_to_pcd"), spin_flag_(spin_flag)
+namespace fs = std::filesystem;
+
+Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv,
+                                   std::atomic<bool> &spin_flag)
+    : Node("rosbag2_to_pcd")
+    , spin_flag_(spin_flag)
 {
-  RCLCPP_INFO(get_logger(), "Starting rosbag2_to_pcd node...");
+    RCLCPP_INFO(get_logger(), "Starting rosbag2_to_pcd node...");
 
-  // Ensure correct number of arguments
-  if (argc != 4) {
-    RCLCPP_ERROR(
-      get_logger(),
-      "Usage: ros2 run bag2pcd bag2pcd <rosbag_folder> <topic> <output_directory>");
-    spin_flag_ = false; // Signal spinning to stop
-    return;
-  }
-
-  const std::string path_bag = argv[1];
-  const std::string topic_cloud = argv[2];
-  const std::string path_pcds = argv[3];
-
-  // Create output directory
-  std::filesystem::create_directories(path_pcds);
-
-  rosbag2_cpp::Reader reader;
-  try {
-    reader.open(path_bag);
-  } catch (const std::exception &e) {
-    RCLCPP_ERROR_STREAM(get_logger(), "Error opening bag file: " << e.what());
-    spin_flag_ = false; // Signal spinning to stop
-    return;
-  }
-
-  const auto &topics = reader.get_metadata().topics_with_message_count;
-  const auto iter_topic =
-    std::find_if(topics.begin(), topics.end(), [&topic_cloud](const auto &topic) {
-      return topic.topic_metadata.name == topic_cloud;
-    });
-
-  if (iter_topic == topics.end()) {
-    RCLCPP_ERROR(get_logger(), "Topic not found in the bag file.");
-    spin_flag_ = false; // Signal spinning to stop
-    return;
-  }
-
-  int ctr_msg_cloud = 1;
-  rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serialization;
-
-  std::string point_cloud_format;
-  bool format_detected = false;
-
-  while (reader.has_next()) {
-
-    auto bag_message = reader.read_next();
-
-    if (bag_message->topic_name == topic_cloud) {
-      auto msg_cloud = std::make_shared<sensor_msgs::msg::PointCloud2>();
-      rclcpp::SerializedMessage extracted_serialized_msg(*bag_message->serialized_data);
-      serialization.deserialize_message(&extracted_serialized_msg, msg_cloud.get());
-
-      if (!format_detected) {
-        point_cloud_format = detect_point_cloud_format(*msg_cloud);
-        format_detected = true;
-        RCLCPP_INFO_STREAM(get_logger(), "Detected point cloud format: " << point_cloud_format);
-      }
-
-      std::stringstream ss_timestamp;
-      ss_timestamp 
-        << msg_cloud->header.stamp.sec 
-        << "."  
-        << std::setw(9) << std::setfill('0') 
-        << msg_cloud->header.stamp.nanosec;
-
-      std::string timestamp = ss_timestamp.str();
-      std::string filename = path_pcds + "/" + timestamp + ".pcd";
-
-      save_point_cloud_to_pcd(*msg_cloud, point_cloud_format, filename);
-      ctr_msg_cloud++;
+    if (argc < 2 || argc > 4)
+    {
+        RCLCPP_ERROR(get_logger(),
+                     "Usage: ros2 run bag2pcd bag2pcd <rosbag_folder> "
+                     "[<topic>] [<output_directory>]");
+        spin_flag_ = false;
+        return;
     }
-  }
 
-  RCLCPP_INFO(get_logger(), "Finished converting bag file to pcd files.");
-  spin_flag_ = false; // Signal spinning to stop // rclcpp::shutdown();
+    const std::string path_bag = argv[1];
+    const std::string topic_cloud = (argc > 2) ? argv[2] : "";
+    const std::string path_pcds = (argc > 3) ? argv[3] : path_bag + "_pcds";
+
+    try
+    {
+        fs::create_directories(path_pcds);
+        process_bag_file(path_bag, topic_cloud, path_pcds);
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR_STREAM(get_logger(), "Error: " << e.what());
+        spin_flag_ = false;
+    }
 }
 
-std::string Rosbag2ToPcdNode::detect_point_cloud_format(const sensor_msgs::msg::PointCloud2 &msg_cloud)
+void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
+                                        const std::string &topic_cloud,
+                                        const std::string &path_pcds)
 {
-  std::unordered_set<std::string> field_names;
-  for (const auto &field : msg_cloud.fields) {
-    field_names.insert(field.name);
-  }
+    rosbag2_cpp::Reader reader;
+    reader.open(path_bag);
 
-  if (field_names == std::unordered_set<std::string>{"x", "y", "z"}) {
-    return "xyz";
-  } else if (field_names == std::unordered_set<std::string>{"x", "y", "z", "rgb"}) {
-    return "xyzrgb";
-  } else if (field_names == std::unordered_set<std::string>{"x", "y", "z", "intensity"}) {
-    return "xyzi";
-  }
+    const auto &topics = reader.get_metadata().topics_with_message_count;
+    std::string selected_topic = topic_cloud;
 
-  throw std::runtime_error("Unsupported point cloud format detected!");
+    if (selected_topic.empty())
+    {
+        for (const auto &topic : topics)
+        {
+            if (topic.topic_metadata.type == "sensor_msgs/msg/PointCloud2")
+            {
+                if (!selected_topic.empty())
+                {
+                    throw std::runtime_error(
+                        "Multiple PointCloud2 topics found. Please specify one "
+                        "explicitly.");
+                }
+                selected_topic = topic.topic_metadata.name;
+            }
+        }
+
+        if (selected_topic.empty())
+        {
+            throw std::runtime_error(
+                "No PointCloud2 topic found in the bag file.");
+        }
+
+        RCLCPP_INFO_STREAM(get_logger(),
+                           "Detected PointCloud2 topic: " << selected_topic);
+    }
+
+    rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serialization;
+    std::string point_cloud_format;
+    bool format_detected = false;
+    int ctr_msg_cloud = 1;
+
+    while (reader.has_next())
+    {
+        auto bag_message = reader.read_next();
+
+        if (bag_message->topic_name == selected_topic)
+        {
+            auto msg_cloud = std::make_shared<sensor_msgs::msg::PointCloud2>();
+            rclcpp::SerializedMessage extracted_serialized_msg(
+                *bag_message->serialized_data);
+            serialization.deserialize_message(&extracted_serialized_msg,
+                                              msg_cloud.get());
+
+            if (!format_detected)
+            {
+                point_cloud_format = detect_point_cloud_format(*msg_cloud);
+                format_detected = true;
+                RCLCPP_INFO_STREAM(get_logger(), "Detected point cloud format: "
+                                                     << point_cloud_format);
+            }
+
+            std::stringstream ss_timestamp;
+            ss_timestamp << msg_cloud->header.stamp.sec << "." << std::setw(9)
+                         << std::setfill('0')
+                         << msg_cloud->header.stamp.nanosec;
+            const std::string filename =
+                path_pcds + "/" + ss_timestamp.str() + ".pcd";
+
+            save_point_cloud_to_pcd(*msg_cloud, point_cloud_format, filename);
+            ++ctr_msg_cloud;
+        }
+    }
+
+    RCLCPP_INFO(get_logger(), "Finished converting bag file to pcd files.");
+    spin_flag_ = false;
+}
+
+std::string Rosbag2ToPcdNode::detect_point_cloud_format(
+    const sensor_msgs::msg::PointCloud2 &msg_cloud)
+{
+    std::unordered_set<std::string> field_names;
+    for (const auto &field : msg_cloud.fields)
+    {
+        field_names.insert(field.name);
+    }
+
+    if (field_names == std::unordered_set<std::string>{"x", "y", "z"})
+    {
+        return "xyz";
+    }
+    else if (field_names ==
+             std::unordered_set<std::string>{"x", "y", "z", "rgb"})
+    {
+        return "xyzrgb";
+    }
+    else if (field_names ==
+             std::unordered_set<std::string>{"x", "y", "z", "intensity"})
+    {
+        return "xyzi";
+    }
+
+    throw std::runtime_error("Unsupported point cloud format detected!");
 }
 
 void Rosbag2ToPcdNode::save_point_cloud_to_pcd(
-  const sensor_msgs::msg::PointCloud2 &msg_cloud, 
-  const std::string &format, 
-  const std::string &filename)
+    const sensor_msgs::msg::PointCloud2 &msg_cloud, const std::string &format,
+    const std::string &filename)
 {
-  if (format == "xyz") {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::fromROSMsg(msg_cloud, *cloud);
-    pcl::io::savePCDFileBinary(filename, *cloud);
-  } else if (format == "xyzrgb") {
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-    pcl::fromROSMsg(msg_cloud, *cloud);
-    pcl::io::savePCDFileBinary(filename, *cloud);
-  } else if (format == "xyzi") {
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::io::savePCDFileBinary(filename, *cloud);
-  } else {
-    throw std::runtime_error("Unsupported point cloud format for saving!");
-  }
+    if (format == "xyz")
+    {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(msg_cloud, *cloud);
+        pcl::io::savePCDFileBinary(filename, *cloud);
+    }
+    else if (format == "xyzrgb")
+    {
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(
+            new pcl::PointCloud<pcl::PointXYZRGB>);
+        pcl::fromROSMsg(msg_cloud, *cloud);
+        pcl::io::savePCDFileBinary(filename, *cloud);
+    }
+    else if (format == "xyzi")
+    {
+        pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(
+            new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::io::savePCDFileBinary(filename, *cloud);
+    }
+    else
+    {
+        throw std::runtime_error("Unsupported point cloud format for saving!");
+    }
 }
 
-}  // namespace rosbag2_to_pcd
+} // namespace rosbag2_to_pcd

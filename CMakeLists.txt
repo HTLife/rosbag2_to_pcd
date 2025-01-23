@@ -43,12 +43,12 @@ ament_target_dependencies(rosbag2_to_pcd_node
 target_include_directories(rosbag2_to_pcd_node PRIVATE include)
 
 ## Add executable
-add_executable(bag2pcd src/main.cpp)
-target_link_libraries(bag2pcd rosbag2_to_pcd_node)
+add_executable(${PROJECT_NAME} src/main.cpp)
+target_link_libraries(${PROJECT_NAME} rosbag2_to_pcd_node)
 
 ## Install targets
 install(
-  TARGETS bag2pcd rosbag2_to_pcd_node
+  TARGETS ${PROJECT_NAME} rosbag2_to_pcd_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
