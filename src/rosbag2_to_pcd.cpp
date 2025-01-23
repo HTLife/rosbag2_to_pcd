@@ -32,8 +32,13 @@
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/serialized_message.hpp>
 #include <rosbag2_cpp/reader.hpp>
+#include <rosbag2_storage/storage_options.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
+
+#include "progress_bar.hpp"
+#include <chrono>
+#include <thread>
 
 namespace rosbag2_to_pcd
 {
@@ -45,10 +50,9 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv,
     : Node("rosbag2_to_pcd")
     , spin_flag_(spin_flag)
 {
-    RCLCPP_INFO(get_logger(), "Starting rosbag2_to_pcd node...");
-
     if (argc < 2 || argc > 4)
     {
+        RCLCPP_INFO(get_logger(), "argc: %d", argc);
         RCLCPP_ERROR(get_logger(),
                      "Usage: ros2 run bag2pcd bag2pcd <rosbag_folder> "
                      "[<topic>] [<output_directory>]");
@@ -56,7 +60,7 @@ Rosbag2ToPcdNode::Rosbag2ToPcdNode(int argc, char **argv,
         return;
     }
 
-    const std::string path_bag = argv[1];
+    const std::string path_bag = fs::absolute(argv[1]).string();
     const std::string topic_cloud = (argc > 2) ? argv[2] : "";
     const std::string path_pcds = (argc > 3) ? argv[3] : path_bag + "_pcds";
 
@@ -76,8 +80,20 @@ void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
                                         const std::string &topic_cloud,
                                         const std::string &path_pcds)
 {
+    size_t total_messages = 0; // Progress bar
+
     rosbag2_cpp::Reader reader;
-    reader.open(path_bag);
+    /// open
+    rosbag2_storage::StorageOptions storage_options;
+    storage_options.uri = path_bag;
+    storage_options.storage_id = "sqlite3"; // Specify the storage ID explicitly
+
+    rosbag2_cpp::ConverterOptions converter_options;
+    converter_options.input_serialization_format = "cdr";
+    converter_options.output_serialization_format = "cdr";
+
+    reader.open(storage_options, converter_options);
+    /// open
 
     const auto &topics = reader.get_metadata().topics_with_message_count;
     std::string selected_topic = topic_cloud;
@@ -95,6 +111,8 @@ void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
                         "explicitly.");
                 }
                 selected_topic = topic.topic_metadata.name;
+                total_messages = topic.message_count; // Get the total messages
+                                                      // for the selected topic
             }
         }
 
@@ -103,18 +121,19 @@ void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
             throw std::runtime_error(
                 "No PointCloud2 topic found in the bag file.");
         }
-
-        RCLCPP_INFO_STREAM(get_logger(),
-                           "Detected PointCloud2 topic: " << selected_topic);
+        std::cout << "Detected PointCloud2 topic: " << selected_topic
+                  << std::endl;
     }
 
     rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serialization;
     std::string point_cloud_format;
     bool format_detected = false;
-    int ctr_msg_cloud = 1;
+    int ctr_msg_cloud = 0;
 
+    ProgressBar bar(total_messages); // Progress bar
     while (reader.has_next())
     {
+
         auto bag_message = reader.read_next();
 
         if (bag_message->topic_name == selected_topic)
@@ -129,8 +148,8 @@ void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
             {
                 point_cloud_format = detect_point_cloud_format(*msg_cloud);
                 format_detected = true;
-                RCLCPP_INFO_STREAM(get_logger(), "Detected point cloud format: "
-                                                     << point_cloud_format);
+                std::cout << "Detected point cloud format: "
+                          << point_cloud_format << std::endl;
             }
 
             std::stringstream ss_timestamp;
@@ -141,11 +160,13 @@ void Rosbag2ToPcdNode::process_bag_file(const std::string &path_bag,
                 path_pcds + "/" + ss_timestamp.str() + ".pcd";
 
             save_point_cloud_to_pcd(*msg_cloud, point_cloud_format, filename);
+
             ++ctr_msg_cloud;
+            bar.update(ctr_msg_cloud); // Progress bar
         }
     }
+    std::cout << "Output folder: " << path_pcds << std::endl;
 
-    RCLCPP_INFO(get_logger(), "Finished converting bag file to pcd files.");
     spin_flag_ = false;
 }
 
